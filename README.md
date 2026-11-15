@@ -4,6 +4,6 @@ Build and decorate a 3D gingerbread house in your browser, just like a real kit:
 
 **Play:** open `index.html` (it's a single self-contained file, no install needed) or visit the GitHub Pages site for this repo.
 
-Steps: Build → Ice → Decorate → Finish. Works with a mouse or touch. Your progress is saved in your own browser.
+Steps: Build → Ice → Decorate → Finish. Works with a mouse or touch. Your progress autosaves in your own browser. Use 💾 **Save** to download your house as a `.gingerbread` file, 📂 **Load** (or drag the file onto the page) to open it again, and 🗂 **My saves** for named save slots in the browser.
 
 Developers: the source is in `src/`; rebuild with `npm i three@0.170.0 esbuild && node build.mjs`.

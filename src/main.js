@@ -630,8 +630,11 @@ function removeAction(obj) { return { do() { decorGroup.remove(obj); if (selecte
 function changeAction(obj, before, after) { return { do() { obj.userData.data = after; applyCandy(obj, after); refreshSel(); }, undo() { obj.userData.data = before; applyCandy(obj, before); refreshSel(); } }; }
 let saveTimer = 0;
 function afterChange() { updateActionButtons(); clearTimeout(saveTimer); saveTimer = setTimeout(save, 250); }
+function getState() {
+  return { v: 1, app: 'gingerbread-workshop', name: $('#name').value, phase, placed: PIECES.filter((p) => pieces[p.id].placed).map((p) => p.id), decor: decorGroup.children.map((o) => o.userData.data) };
+}
 function save() {
-  const state = { v: 1, name: $('#name').value, phase, muted: sfx.muted, placed: PIECES.filter((p) => pieces[p.id].placed).map((p) => p.id), decor: decorGroup.children.map((o) => o.userData.data) };
+  const state = { ...getState(), muted: sfx.muted };
   try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) { console.warn('save failed', e); }
 }
 function load() {
@@ -1129,6 +1132,115 @@ function doReset() {
   toast('Fresh kit unwrapped! 🎁');
 }
 
+// ---------------- save / load (files + named slots) ----------------
+const SLOTS_KEY = 'gingerbread-house-slots-v1';
+const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const slug = (n) => (n || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'my';
+const isNums = (a, len) => Array.isArray(a) && (len == null || a.length === len) && a.every((x) => typeof x === 'number' && isFinite(x));
+const isNum = (x) => typeof x === 'number' && isFinite(x);
+function validateState(s) {
+  if (!s || typeof s !== 'object' || Array.isArray(s)) throw 'it isn’t a gingerbread house save';
+  if (s.app != null && s.app !== 'gingerbread-workshop') throw 'it was made by a different app';
+  if (s.v !== 1) throw 'it’s from an unknown version of the workshop';
+  if (s.name != null && typeof s.name !== 'string') throw 'the name in it is damaged';
+  if (!Array.isArray(s.placed) || !s.placed.every((id) => typeof id === 'string' && pieces[id])) throw 'the house pieces in it are damaged';
+  if (!Array.isArray(s.decor)) throw 'the decorations in it are missing';
+  if (s.decor.length > 5000) throw 'it has too many decorations';
+  s.decor.forEach((d, i) => {
+    const ok = d && typeof d === 'object' && ({
+      candy: () => KINDS[d.k] && !KINDS[d.k].scatter && isNums(d.p, 3) && isNums(d.q, 4) && (d.m === 'flat' || d.m === 'stand') && (d.r == null || isNum(d.r)) && (d.v == null || isNum(d.v)),
+      line: () => isNums(d.pts) && d.pts.length >= 6 && d.pts.length % 3 === 0 && d.pts.length < 60000 && isNum(d.rad) && d.rad > 0 && d.rad < 1 && ICING[d.col],
+      dot: () => isNums(d.p, 3) && isNums(d.n, 3) && isNum(d.rad) && d.rad > 0 && d.rad < 1 && ICING[d.col],
+      scatter: () => (d.k === 'sprinkles' || d.k === 'sugar') && isNum(d.seed) && isNums(d.pts) && d.pts.length % 3 === 0 && d.pts.length <= 15000 && (d.cols == null || isNums(d.cols)),
+      shingles: () => isNum(d.seed),
+      drips: () => isNum(d.seed) && (d.col == null || ICING[d.col]),
+    }[d.t] || (() => false))();
+    if (!ok) throw `decoration #${i + 1} in it is damaged`;
+  });
+  if (s.decor.length && !REQUIRED.every((id) => s.placed.includes(id))) throw 'it has decorations but no finished house';
+}
+function applyRaw(s) {
+  tweens.length = 0; cancelActive(); select(null); hideGhost();
+  decorGroup.clear(); tempGroup.clear(); undoStack.length = 0; redoStack.length = 0;
+  for (const p of PIECES) { const pc = pieces[p.id]; removeSeams(p.id); pc.placed = false; pc.busy = false; pc.homeP.set(...p.home); pc.mesh.position.copy(pc.homeP); pc.mesh.quaternion.copy(pc.homeQ); }
+  for (const p of PIECES) if (s.placed.includes(p.id)) placeInstant(p.id);
+  updateInnerLight();
+  for (const d of s.decor) decorGroup.add(createDecoration(d));
+  $('#name').value = s.name || '';
+  window.__builtAnnounced = allBuilt();
+  phase = ORDER.includes(s.phase) && (s.phase === 'build' || allBuilt()) ? s.phase : allBuilt() ? 'ice' : 'build';
+  tool = phase === 'decorate' ? 'gumdrop' : 'pipe';
+  controls.autoRotate = phase === 'finish'; snow.visible = phase === 'finish';
+}
+function loadState(s) {
+  validateState(s);
+  const prev = getState();
+  try { applyRaw(s); } catch (e) { console.warn('load failed, restoring', e); applyRaw(prev); throw 'it couldn’t be rebuilt'; }
+  flyTo(...(phase === 'build' ? buildView() : houseView()));
+  updateNameCard(); renderGuide(); renderPanel(); applyViewOffset(); afterChange();
+}
+function saveToFile() {
+  const st = { ...getState(), savedAt: new Date().toISOString() };
+  const fname = `${slug(st.name)}-gingerbread.gingerbread`;
+  const url = URL.createObjectURL(new Blob([JSON.stringify(st)], { type: 'application/json' }));
+  const a = document.createElement('a'); a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  sfx.chime(); toast(`💾 Saved to your downloads as ${fname}`, 3200);
+}
+function loadError(fileName, why) {
+  window.__lastLoadError = why;
+  modal(`<h3>Hmm, that file didn’t work 🍪</h3>We couldn’t open <b>${esc(fileName)}</b> because ${esc(why)}.<br><br>Please choose a <b>.gingerbread</b> file saved with the 💾 Save button. Your current house hasn’t changed.`, [{ label: 'OK', cls: 'go' }]);
+}
+async function loadFile(f) {
+  if (!f) return;
+  let s;
+  try {
+    if (f.size > 25e6) throw 'it’s far too big';
+    try { s = JSON.parse(await f.text()); } catch { throw 'it isn’t a gingerbread house save'; }
+    loadState(s);
+  } catch (err) { loadError(f.name, typeof err === 'string' ? err : 'it looks damaged'); return; }
+  window.__lastLoadError = null; $('#modal').hidden = true;
+  sfx.chime(); toast(`📂 Opened ${s.name ? s.name + '’s' : 'the'} gingerbread house`, 2600);
+}
+const fileInput = document.createElement('input');
+fileInput.type = 'file'; fileInput.id = 'file-load'; fileInput.accept = '.gingerbread,.json,application/json'; fileInput.hidden = true;
+fileInput.onchange = () => { const f = fileInput.files[0]; fileInput.value = ''; loadFile(f); };
+document.body.appendChild(fileInput);
+let dragDepth = 0;
+const hasFiles = (e) => e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files');
+window.addEventListener('dragenter', (e) => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth++; document.body.classList.add('dropping'); });
+window.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });
+window.addEventListener('dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) document.body.classList.remove('dropping'); });
+window.addEventListener('drop', (e) => { e.preventDefault(); dragDepth = 0; document.body.classList.remove('dropping'); const f = e.dataTransfer && e.dataTransfer.files[0]; if (f) loadFile(f); });
+
+function getSlots() { try { const a = JSON.parse(localStorage.getItem(SLOTS_KEY) || '[]'); return Array.isArray(a) ? a.filter((x) => x && x.id && x.state) : []; } catch { return []; } }
+function putSlots(a) { localStorage.setItem(SLOTS_KEY, JSON.stringify(a)); }
+const fmtTime = (iso) => { try { return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }); } catch { return iso; } };
+function saveSlot(title) {
+  const st = getState(), a = getSlots();
+  const slot = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), title: (title || '').trim().slice(0, 40) || `${st.name ? st.name + '’s' : 'My'} house`, savedAt: new Date().toISOString(), state: st };
+  a.unshift(slot);
+  try { putSlots(a); } catch { toast('This browser is out of save space — use 💾 Save to download a file instead', 4000); return null; }
+  return slot;
+}
+function openSaves() {
+  const slots = getSlots(), nm = $('#name').value.trim();
+  const list = slots.length ? slots.map((sl) => `<div class="slot"><div class="slot-info"><b>${esc(sl.title)}</b><small>${esc(fmtTime(sl.savedAt))} · ${sl.state.placed.length}/7 pieces · ${sl.state.decor.length} decorations</small></div><button class="slot-open" data-open="${esc(sl.id)}">Open</button><button class="slot-del" data-del="${esc(sl.id)}" title="Delete this save">🗑</button></div>`).join('') : '<p class="slot-empty">No saves yet — name this one and press “Save as new slot”.</p>';
+  modal(`<h3>🗂 My saves</h3><div class="slot-new"><input id="slot-name" maxlength="40" placeholder="Name this save" value="${esc(nm ? nm + '’s house' : 'My house')}"><button id="slot-add" class="primary">💾 Save as new slot</button></div><div class="slots">${list}</div><p class="note">Saves are kept in this browser. Your work also autosaves as you go. To move a house to another computer, use 💾 Save and 📂 Load.</p>`, [{ label: 'Close' }]);
+  const body = $('#modal-body');
+  $('#slot-add').onclick = () => { const sl = saveSlot($('#slot-name').value); if (sl) { sfx.chime(); toast(`Saved “${sl.title}”`); openSaves(); } };
+  body.querySelectorAll('[data-open]').forEach((b) => (b.onclick = () => {
+    const sl = getSlots().find((x) => x.id === b.dataset.open); if (!sl) return;
+    try { loadState(sl.state); } catch (err) { loadError(sl.title, typeof err === 'string' ? err : 'it looks damaged'); return; }
+    $('#modal').hidden = true; sfx.chime(); toast(`📂 Opened “${sl.title}”`);
+  }));
+  body.querySelectorAll('[data-del]').forEach((b) => (b.onclick = () => {
+    const a = getSlots(), sl = a.find((x) => x.id === b.dataset.del); if (!sl) return;
+    try { putSlots(a.filter((x) => x.id !== sl.id)); } catch { }
+    sfx.tick(); toast(`Deleted “${sl.title}”`); openSaves();
+  }));
+}
+
 // ---------------- falling snow (finish) ----------------
 const snow = (() => {
   const N = 1400, pos = new Float32Array(N * 3), spd = new Float32Array(N);
@@ -1210,6 +1322,7 @@ $('#name').addEventListener('input', () => { updateNameCard(); afterChange(); })
 $('#undo').onclick = undo; $('#redo').onclick = redo;
 $('#rotl').onclick = () => rotateSel(-1); $('#rotr').onclick = () => rotateSel(1);
 $('#del').onclick = deleteSel; $('#photo').onclick = takePhoto;
+$('#save').onclick = saveToFile; $('#load').onclick = () => fileInput.click(); $('#saves').onclick = openSaves;
 $('#reset').onclick = () => modal('<h3>Start over?</h3>This unwraps a fresh kit and clears your house and decorations.', [{ label: 'Keep my house' }, { label: 'Start over', cls: 'go', onClick: doReset }]);
 $('#next').onclick = () => { const i = ORDER.indexOf(phase); if (phase === 'finish') takePhoto(); else setPhase(ORDER[i + 1]); };
 $('#autobuild').onclick = autoBuild;
@@ -1250,6 +1363,7 @@ window.GB = {
   view(px, py, pz, tx, ty, tz) { tweens.length = 0; camera.position.set(px, py, pz); controls.target.set(tx, ty, tz); controls.update(); },
   get lastPhoto() { return window.__lastPhoto; },
   busy() { return tweens.length > 0; },
+  state: getState, slots: () => getSlots().map((x) => x.title), get lastLoadError() { return window.__lastLoadError; },
 };
 
 init();
