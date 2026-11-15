@@ -559,33 +559,41 @@ function buildShingles(data) {
       }
     }
   }
-  const im = new THREE.InstancedMesh(geom('shingle', () => new THREE.BoxGeometry(0.33, 0.035, 0.42)), mat('shingleM', () => new THREE.MeshStandardMaterial({ map: waferTex, roughness: 0.8 })), tiles.length);
-  tiles.forEach(([m, c], i) => { im.setMatrixAt(i, m); im.setColorAt(i, _c.set(c)); });
+  const ex = new Set(data.x || []), keep = tiles.map((_, i) => i).filter((i) => !ex.has(i));
+  if (!keep.length) return grp;
+  const im = new THREE.InstancedMesh(geom('shingle', () => new THREE.BoxGeometry(0.33, 0.035, 0.42)), mat('shingleM', () => new THREE.MeshStandardMaterial({ map: waferTex, roughness: 0.8 })), keep.length);
+  keep.forEach((ti, j) => { im.setMatrixAt(j, tiles[ti][0]); im.setColorAt(j, _c.set(tiles[ti][1])); });
+  im.userData.elemIds = keep;
   im.castShadow = true; im.receiveShadow = true; im.computeBoundingSphere();
   grp.add(im); return grp;
 }
+const icicleGeo = () => geom('icicle', () => new THREE.LatheGeometry([[0, 0.15], [1, 0.0], [0.85, -0.35], [0.5, -0.75], [0.3, -0.95], [0, -1]].map(([a, b]) => new THREE.Vector2(a, b)), 8));
 function buildDrips(data) {
-  const rng = mulberry(data.seed), geos = [];
+  const rng = mulberry(data.seed), ex = new Set(data.x || []), m4 = icingMat(data.col || 'white');
+  const grp = new THREE.Group(), icicles = []; let e = 0;
   for (const side of [-1, 1]) {
     const edges = [[[RL + 0.02, -RZ], [RL + 0.02, RZ]], [[0.05, RZ + 0.02], [RL, RZ + 0.02]], [[0.05, -RZ - 0.02], [RL, -RZ - 0.02]]];
     for (const [[x0, z0], [x1, z1]] of edges) {
       const len = Math.hypot(x1 - x0, z1 - z0), n = Math.ceil(len / 0.3), pts = [];
       for (let i = 0; i <= n; i++) pts.push(roofLocalToWorld(side, x0 + (x1 - x0) * i / n, T * 0.75, z0 + (z1 - z0) * i / n));
-      geos.push(tubeGeometry(pts, 0.075, { lumpy: 1.6 }));
+      const eid = 'e' + e++;
+      if (!ex.has(eid)) { const tm = mk(tubeGeometry(pts, 0.075, { lumpy: 1.6 }), m4); tm.userData.elemId = eid; grp.add(tm); }
       const m = Math.floor(len / 0.11);
       for (let i = 0; i <= m; i++) {
         if (rng() < 0.28) continue;
         const t = (i + rng() * 0.4) / m, p = roofLocalToWorld(side, x0 + (x1 - x0) * t, 0.02, z0 + (z1 - z0) * t);
         const L = 0.08 + Math.pow(rng(), 2.2) * 0.45, r = 0.045 + rng() * 0.025;
-        const prof = [[0, 0.04], [r, 0.0], [r * 0.85, -L * 0.35], [r * 0.5, -L * 0.75], [r * 0.3, -L * 0.95], [0, -L]].map(([a, b]) => new THREE.Vector2(a, b));
-        const g = new THREE.LatheGeometry(prof, 8); g.deleteAttribute('uv'); g.translate(p.x, p.y, p.z);
-        geos.push(g.index ? g : g);
+        icicles.push([p, L, r]);
       }
     }
   }
-  const merged = mergeGeometries(geos.map((g) => (g.index ? g.toNonIndexed() : g)));
-  const m = mk(merged, icingMat(data.col || 'white'));
-  const grp = new THREE.Group(); grp.add(m); return grp;
+  const keep = icicles.map((_, i) => i).filter((i) => !ex.has(i));
+  if (keep.length) {
+    const im = new THREE.InstancedMesh(icicleGeo(), m4, keep.length);
+    keep.forEach((ii, j) => { const [p, L, r] = icicles[ii]; im.setMatrixAt(j, _m4.compose(p, new Q(), _s.set(r, L, r))); });
+    im.userData.elemIds = keep; im.castShadow = true; im.receiveShadow = true; im.computeBoundingSphere(); grp.add(im);
+  }
+  return grp;
 }
 
 function candyQuat(n, mode, rot) {
@@ -626,7 +634,22 @@ function commit(action) { action.do(); undoStack.push(action); if (undoStack.len
 function undo() { const a = undoStack.pop(); if (!a) return; a.undo(); redoStack.push(a); sfx.tick(); afterChange(); }
 function redo() { const a = redoStack.pop(); if (!a) return; a.do(); undoStack.push(a); sfx.tick(); afterChange(); }
 function addAction(obj) { return { do() { decorGroup.add(obj); }, undo() { decorGroup.remove(obj); if (selected === obj) select(null); } }; }
-function removeAction(obj) { return { do() { decorGroup.remove(obj); if (selected === obj) select(null); }, undo() { decorGroup.add(obj); } }; }
+function insertAt(o, i) { decorGroup.add(o); const a = decorGroup.children; a.splice(a.indexOf(o), 1); a.splice(Math.min(Math.max(i, 0), a.length), 0, o); }
+function removeAction(obj) { return removeManyAction([obj]); }
+function removeManyAction(objs) {
+  const idx = objs.map((o) => decorGroup.children.indexOf(o));
+  return { do() { if (objs.includes(selected)) select(null); objs.forEach((o) => decorGroup.remove(o)); }, undo() { objs.map((o, k) => [o, idx[k]]).sort((a, b) => a[1] - b[1]).forEach(([o, i]) => insertAt(o, i)); } };
+}
+function replaceAction(oldO, newO) {
+  const swap = (a, b) => { const i = decorGroup.children.indexOf(a); if (selected === a) select(null); decorGroup.remove(a); insertAt(b, i); };
+  return { do() { swap(oldO, newO); }, undo() { swap(newO, oldO); } };
+}
+function removeAllOf(pred, what) {
+  const objs = decorGroup.children.filter((o) => pred(o.userData.data));
+  if (!objs.length) { toast(`There are no ${what} to remove`); return; }
+  commit(removeManyAction(objs)); sfx.tick(); toast(`🧹 Removed all ${what} (Undo brings them back)`, 2400);
+}
+const isDrips = (d) => d.t === 'drips', isWafer = (d) => d.t === 'shingles' || (d.t === 'candy' && d.k === 'wafer');
 function changeAction(obj, before, after) { return { do() { obj.userData.data = after; applyCandy(obj, after); refreshSel(); }, undo() { obj.userData.data = before; applyCandy(obj, before); refreshSel(); } }; }
 let saveTimer = 0;
 function afterChange() { updateActionButtons(); clearTimeout(saveTimer); saveTimer = setTimeout(save, 250); }
@@ -679,7 +702,7 @@ const sfx = {
 let phase = 'build';
 let tool = 'pipe';          // ice: pipe|look ; decorate: select|look|<kind>
 let tip = 'medium', icingColor = 'white';
-let selected = null, selBox = null;
+let selected = null, selBox = null, selElem = null;
 const tweens = [];
 const TIPS = { thin: { line: 0.03, dot: 0.06 }, medium: { line: 0.05, dot: 0.1 }, thick: { line: 0.085, dot: 0.15 } };
 const nextVariant = {};
@@ -735,19 +758,21 @@ function renderPanel() {
       <div class="row"><button class="tool" data-tool="pipe">✍️ Pipe</button><button class="tool" data-tool="look">✋ Look around</button></div>
       <h4>Tip size</h4><div class="seg" id="tips">${Object.keys(TIPS).map((t) => `<button data-tip="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</div>
       <h4>Icing colour</h4><div class="row" id="colors">${Object.entries(ICING).map(([k, c]) => `<button class="sw" data-col="${k}" title="${k}" style="background:${c}"></button>`).join('')}</div>
-      <h4>Snowy roof</h4><button class="secondary" id="drips" style="width:100%">❄️ Add icicle drips to roof edges</button>
+      <h4>Snowy roof</h4><div class="row pair"><button class="secondary" id="drips">❄️ Add drips</button><button class="secondary" id="undrips">🧹 Remove drips</button></div>
       <p class="note">Drag = line · tap = dot · Ctrl+Z undoes.</p>`;
     p.querySelectorAll('[data-tip]').forEach((b) => (b.onclick = () => { tip = b.dataset.tip; renderPanelState(); }));
     p.querySelectorAll('[data-col]').forEach((b) => (b.onclick = () => { icingColor = b.dataset.col; renderPanelState(); }));
     $('#drips').onclick = () => { sfx.squishStart(); setTimeout(() => sfx.squishStop(), 350); commit(addAction(createDecoration({ t: 'drips', seed: newSeed(), col: icingColor }))); toast('Icicles piped along the roof ❄️'); };
+    $('#undrips').onclick = () => removeAllOf(isDrips, 'icicle drips');
   } else if (phase === 'decorate') {
     p.innerHTML = `<h3>🍬 Candy tray</h3>
       <div class="row" style="margin-bottom:8px"><button class="tool" data-tool="select">👆 Select / move</button><button class="tool" data-tool="look">✋ Look</button></div>
       <div class="tray">${Object.entries(KINDS).map(([k, d]) => `<button class="candy" data-kind="${k}" title="${d.label}"><img alt="" src="${thumbs[k] || ''}">${d.label}</button>`).join('')}</div>
-      <h4>Roof</h4><button class="secondary" id="shingle" style="width:100%">🧇 Shingle the whole roof with wafers</button>
+      <h4>Roof</h4><div class="row pair"><button class="secondary" id="shingle">🧇 Shingle roof</button><button class="secondary" id="unwafer">🧹 Remove wafers</button></div>
       <p class="note">Drag candy onto the house, or tap it then click to stamp. Sprinkles and sugar snow scatter as you drag. Trees and fences go in the yard.</p>`;
     p.querySelectorAll('[data-kind]').forEach((b) => b.addEventListener('pointerdown', (e) => trayDown(e, b.dataset.kind)));
     $('#shingle').onclick = () => { commit(addAction(createDecoration({ t: 'shingles', seed: newSeed() }))); sfx.pop(); toast('Wafer shingles laid 🧇'); };
+    $('#unwafer').onclick = () => removeAllOf(isWafer, 'wafers');
   } else {
     p.innerHTML = `<h3>🎉 All done!</h3>
       <button class="primary" id="photo2">📷 Take photo</button>
@@ -770,12 +795,14 @@ function renderPanelState() {
   p.querySelectorAll('[data-kind]').forEach((b) => b.classList.toggle('on', b.dataset.kind === tool));
   const spin = $('#spin'); if (spin) spin.classList.toggle('on', controls.autoRotate);
   const sn = $('#snowt'); if (sn) sn.classList.toggle('on', snow.visible);
-  updateCursor(); hideGhost();
+  updateCursor(); hideGhost(); updateActionButtons();
 }
 function updateActionButtons() {
   $('#undo').disabled = !undoStack.length; $('#redo').disabled = !redoStack.length;
   const rot = selected && selected.userData.data.t === 'candy';
-  $('#rotl').disabled = $('#rotr').disabled = !rot; $('#del').disabled = !selected;
+  $('#rotl').disabled = $('#rotr').disabled = !rot || selElem != null; $('#del').disabled = !selected;
+  const d = decorGroup.children.map((o) => o.userData.data), ud = $('#undrips'), uw = $('#unwafer');
+  if (ud) ud.disabled = !d.some(isDrips); if (uw) uw.disabled = !d.some(isWafer);
 }
 function updateCursor() {
   let c = 'grab';
@@ -981,6 +1008,11 @@ function startSelect(e) {
   const h = raycaster.intersectObjects(decorGroup.children, true)[0];
   if (!h) { select(null); return false; }
   let o = h.object; while (o.parent && o.parent !== decorGroup) o = o.parent;
+  const t = o.userData.data.t;
+  if (t === 'drips' || t === 'shingles') {
+    const id = h.object.isInstancedMesh ? h.object.userData.elemIds?.[h.instanceId] : h.object.userData.elemId;
+    if (id != null) { select(o, { id, mesh: h.object, inst: h.instanceId }); active = { type: 'move', obj: o, before: o.userData.data, moved: false }; return true; }
+  }
   select(o);
   active = { type: 'move', obj: o, before: o.userData.data, moved: false };
   return true;
@@ -1076,14 +1108,27 @@ function showGhost(d) {
 function hideGhost() { if (ghost) { scene.remove(ghost.obj); ghost = null; } }
 
 // selection
-function select(o) {
-  selected = o; if (selBox) { scene.remove(selBox); selBox = null; }
-  if (o) { selBox = new THREE.BoxHelper(o, 0xffcc33); selBox.userData.noHit = true; scene.add(selBox); sfx.tick(); }
+function select(o, elem = null) {
+  selected = o; selElem = elem ? elem.id : null; if (selBox) { scene.remove(selBox); selBox = null; }
+  if (o && elem) {
+    const m = elem.mesh, box = new THREE.Box3();
+    if (m.isInstancedMesh) { if (!m.geometry.boundingBox) m.geometry.computeBoundingBox(); m.getMatrixAt(elem.inst, _m4); box.copy(m.geometry.boundingBox).applyMatrix4(_m4).applyMatrix4(m.matrixWorld); box.expandByScalar(0.02); }
+    else box.setFromObject(m);
+    selBox = new THREE.Box3Helper(box, 0xffcc33); selBox.userData.noHit = true; scene.add(selBox); sfx.tick();
+  } else if (o) { selBox = new THREE.BoxHelper(o, 0xffcc33); selBox.userData.noHit = true; scene.add(selBox); sfx.tick(); }
   updateActionButtons();
 }
-function refreshSel() { if (selBox && selected) selBox.update(); }
+function refreshSel() { if (selBox && selected && selBox.isBoxHelper !== false && selBox.update && selElem == null) selBox.update(); }
 function rotateSel(dir) { if (!selected || selected.userData.data.t !== 'candy') return; const b = selected.userData.data; commit(changeAction(selected, b, { ...b, r: (b.r || 0) + dir * Math.PI / 12 })); sfx.tick(); }
-function deleteSel() { if (!selected) return; const o = selected; select(null); commit(removeAction(o)); sfx.tick(); }
+function deleteSel() {
+  if (!selected) return;
+  const o = selected, id = selElem; select(null);
+  if (id != null) {
+    const d = o.userData.data, nd = { ...d, x: [...(d.x || []), id] }, no = createDecoration(nd);
+    commit(no.children.length ? replaceAction(o, no) : removeAction(o));
+  } else commit(removeAction(o));
+  sfx.tick();
+}
 
 window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT') { if (e.key === 'Enter') e.target.blur(); return; }
@@ -1138,6 +1183,7 @@ const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 const slug = (n) => (n || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'my';
 const isNums = (a, len) => Array.isArray(a) && (len == null || a.length === len) && a.every((x) => typeof x === 'number' && isFinite(x));
 const isNum = (x) => typeof x === 'number' && isFinite(x);
+const okX = (x) => x == null || (Array.isArray(x) && x.length <= 10000 && x.every((v) => isNum(v) || (typeof v === 'string' && /^e\d+$/.test(v))));
 function validateState(s) {
   if (!s || typeof s !== 'object' || Array.isArray(s)) throw 'it isn’t a gingerbread house save';
   if (s.app != null && s.app !== 'gingerbread-workshop') throw 'it was made by a different app';
@@ -1152,8 +1198,8 @@ function validateState(s) {
       line: () => isNums(d.pts) && d.pts.length >= 6 && d.pts.length % 3 === 0 && d.pts.length < 60000 && isNum(d.rad) && d.rad > 0 && d.rad < 1 && ICING[d.col],
       dot: () => isNums(d.p, 3) && isNums(d.n, 3) && isNum(d.rad) && d.rad > 0 && d.rad < 1 && ICING[d.col],
       scatter: () => (d.k === 'sprinkles' || d.k === 'sugar') && isNum(d.seed) && isNums(d.pts) && d.pts.length % 3 === 0 && d.pts.length <= 15000 && (d.cols == null || isNums(d.cols)),
-      shingles: () => isNum(d.seed),
-      drips: () => isNum(d.seed) && (d.col == null || ICING[d.col]),
+      shingles: () => isNum(d.seed) && okX(d.x),
+      drips: () => isNum(d.seed) && (d.col == null || ICING[d.col]) && okX(d.x),
     }[d.t] || (() => false))();
     if (!ok) throw `decoration #${i + 1} in it is damaged`;
   });
@@ -1363,6 +1409,16 @@ window.GB = {
   view(px, py, pz, tx, ty, tz) { tweens.length = 0; camera.position.set(px, py, pz); controls.target.set(tx, ty, tz); controls.update(); },
   get lastPhoto() { return window.__lastPhoto; },
   busy() { return tweens.length > 0; },
+  selElem: () => selElem,
+  findElem(type, inst) {
+    const r = renderer.domElement.getBoundingClientRect();
+    for (let y = r.top + 120; y < r.bottom - 120; y += 9) for (let x = r.left + 330; x < r.right - 330; x += 9) {
+      setRay({ clientX: x, clientY: y }); const h = raycaster.intersectObjects(decorGroup.children, true)[0]; if (!h) continue;
+      let o = h.object; while (o.parent && o.parent !== decorGroup) o = o.parent;
+      if (o.userData.data.t === type && (inst ? h.object.isInstancedMesh && h.object.userData.elemIds : (h.object.userData.elemIds || h.object.userData.elemId))) return { x, y };
+    }
+    return null;
+  },
   state: getState, slots: () => getSlots().map((x) => x.title), get lastLoadError() { return window.__lastLoadError; },
 };
 
