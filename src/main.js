@@ -649,6 +649,14 @@ function removeAllOf(pred, what) {
   if (!objs.length) { toast(`There are no ${what} to remove`); return; }
   commit(removeManyAction(objs)); sfx.tick(); toast(`🧹 Removed all ${what} (Undo brings them back)`, 2400);
 }
+const isFence = (d) => d.t === 'candy' && d.k === 'fence';
+function addManyAction(objs) { return { do() { objs.forEach((o) => decorGroup.add(o)); }, undo() { if (objs.includes(selected)) select(null); objs.forEach((o) => decorGroup.remove(o)); } }; }
+function fenceAround() {
+  const fences = fenceList(), objs = [];
+  for (const sl of ringSlots()) { if (gateGap && isGateSlot(sl)) continue; if (fences.some((f) => f.c.distanceTo(sl.c) < 0.15)) continue; objs.push(createDecoration(fenceData(sl.c, sl.yaw))); }
+  if (!objs.length) { toast('The fence is already all the way round 🥨'); return; }
+  commit(addManyAction(objs)); sfx.chime(); toast(`🥨 Built ${objs.length} fence pieces around the house${gateGap ? ' with a gate at the door' : ''}`, 2600);
+}
 const isDrips = (d) => d.t === 'drips', isWafer = (d) => d.t === 'shingles' || (d.t === 'candy' && d.k === 'wafer');
 function changeAction(obj, before, after) { return { do() { obj.userData.data = after; applyCandy(obj, after); refreshSel(); }, undo() { obj.userData.data = before; applyCandy(obj, before); refreshSel(); } }; }
 let saveTimer = 0;
@@ -768,11 +776,17 @@ function renderPanel() {
     p.innerHTML = `<h3>🍬 Candy tray</h3>
       <div class="row" style="margin-bottom:8px"><button class="tool" data-tool="select">👆 Select / move</button><button class="tool" data-tool="look">✋ Look</button></div>
       <div class="tray">${Object.entries(KINDS).map(([k, d]) => `<button class="candy" data-kind="${k}" title="${d.label}"><img alt="" src="${thumbs[k] || ''}">${d.label}</button>`).join('')}</div>
+      <h4>Yard</h4><div class="row pair"><button class="secondary" id="fencearound">🥨 Fence around house</button><button class="secondary" id="unfence">🧹 Remove fences</button></div>
+      <div class="row" style="margin-top:6px;align-items:center"><label class="chk"><input type="checkbox" id="gate" ${gateGap ? 'checked' : ''}> Gate at the door</label><button class="tool" id="freeplace" title="Turn yard snapping off (or hold Shift)">🔓 Free place</button></div>
       <h4>Roof</h4><div class="row pair"><button class="secondary" id="shingle">🧇 Shingle roof</button><button class="secondary" id="unwafer">🧹 Remove wafers</button></div>
       <p class="note">Drag candy onto the house, or tap it then click to stamp. Sprinkles and sugar snow scatter as you drag. Trees and fences go in the yard.</p>`;
     p.querySelectorAll('[data-kind]').forEach((b) => b.addEventListener('pointerdown', (e) => trayDown(e, b.dataset.kind)));
     $('#shingle').onclick = () => { commit(addAction(createDecoration({ t: 'shingles', seed: newSeed() }))); sfx.pop(); toast('Wafer shingles laid 🧇'); };
     $('#unwafer').onclick = () => removeAllOf(isWafer, 'wafers');
+    $('#fencearound').onclick = fenceAround;
+    $('#unfence').onclick = () => removeAllOf(isFence, 'fences');
+    $('#gate').onchange = (e) => { gateGap = e.target.checked; };
+    $('#freeplace').onclick = () => { freePlace = !freePlace; renderPanelState(); toast(freePlace ? '🔓 Free place: yard items go exactly where you drop them' : '🧲 Snapping on: yard items line up neatly'); };
   } else {
     p.innerHTML = `<h3>🎉 All done!</h3>
       <button class="primary" id="photo2">📷 Take photo</button>
@@ -793,6 +807,7 @@ function renderPanelState() {
   p.querySelectorAll('[data-tip]').forEach((b) => b.classList.toggle('on', b.dataset.tip === tip));
   p.querySelectorAll('[data-col]').forEach((b) => b.classList.toggle('on', b.dataset.col === icingColor));
   p.querySelectorAll('[data-kind]').forEach((b) => b.classList.toggle('on', b.dataset.kind === tool));
+  const fp = $('#freeplace'); if (fp) fp.classList.toggle('on', freePlace);
   const spin = $('#spin'); if (spin) spin.classList.toggle('on', controls.autoRotate);
   const sn = $('#snowt'); if (sn) sn.classList.toggle('on', snow.visible);
   updateCursor(); hideGhost(); updateActionButtons();
@@ -801,7 +816,8 @@ function updateActionButtons() {
   $('#undo').disabled = !undoStack.length; $('#redo').disabled = !redoStack.length;
   const rot = selected && selected.userData.data.t === 'candy';
   $('#rotl').disabled = $('#rotr').disabled = !rot || selElem != null; $('#del').disabled = !selected;
-  const d = decorGroup.children.map((o) => o.userData.data), ud = $('#undrips'), uw = $('#unwafer');
+  const d = decorGroup.children.map((o) => o.userData.data), ud = $('#undrips'), uw = $('#unwafer'), uf = $('#unfence');
+  if (uf) uf.disabled = !d.some(isFence);
   if (ud) ud.disabled = !d.some(isDrips); if (uw) uw.disabled = !d.some(isWafer);
 }
 function updateCursor() {
@@ -910,7 +926,7 @@ let active = null;
 const dragPlane = new THREE.Plane(UP, -0.6), _hp = new V3();
 
 stage.addEventListener('pointerdown', (e) => {
-  sfx.unlock();
+  sfx.unlock(); shiftHeld = e.shiftKey;
   if (e.target !== renderer.domElement || e.button !== 0) return;
   if (pointers.size > 1) { cancelActive(); return; }
   let ok = false;
@@ -968,10 +984,81 @@ function stampUpdate(h) {
   const d = h ? candyDataAt(active.kind, h) : null;
   active.last = d; if (d) showGhost(d); else hideGhost();
 }
+// ---------------- yard snapping ----------------
+const RING_X = W / 2 + 1, RING_Z = D / 2 + 1;           // fence ring around the house: 6 x 7 board units
+let shiftHeld = false, freePlace = false, gateGap = true, snapExclude = null;
+const isFreePlace = () => shiftHeld || freePlace;
+const isGroundHit = (hit) => hit.object === snowMesh || (hit.object === boardMesh && hit.normal.y > 0.9);
+const yawQuat = (yaw) => new Q().setFromAxisAngle(UP, yaw);
+const snap45 = (a) => Math.round(a / (Math.PI / 4)) * (Math.PI / 4);
+function camYaw() { const z = camera.position.clone().sub(controls.target); return Math.atan2(z.x, z.z); }
+function fenceList() {
+  return decorGroup.children.filter((o) => o !== snapExclude && o.userData.data.t === 'candy' && o.userData.data.k === 'fence').map((o) => {
+    const d = o.userData.data, q = new Q().fromArray(d.q).multiply(yawQuat(d.r || 0));
+    const ax = new V3(1, 0, 0).applyQuaternion(q); ax.y = 0; ax.normalize();
+    const c = new V3(d.p[0], 0, d.p[2]);
+    return { o, c, ax, ends: [c.clone().addScaledVector(ax, -0.5), c.clone().addScaledVector(ax, 0.5)] };
+  });
+}
+function ringSlots() {
+  const slots = [];
+  for (const sz of [-1, 1]) for (let k = 0; k < RING_X * 2; k++) slots.push({ c: new V3(-RING_X + 0.5 + k, 0, sz * RING_Z), yaw: 0, front: sz > 0 });
+  for (const sx of [-1, 1]) for (let k = 0; k < RING_Z * 2; k++) slots.push({ c: new V3(sx * RING_X, 0, -RING_Z + 0.5 + k), yaw: Math.PI / 2 });
+  return slots;
+}
+const isGateSlot = (sl) => sl.front && Math.abs(sl.c.x) < 1;
+function fenceData(c, yaw, keep, kind = 'fence') {
+  return { t: 'candy', k: kind, v: keep ? keep.v : 0, m: 'stand', p: [r3(c.x), r3(snowHeight(c.x, c.z)), r3(c.z)], q: yawQuat(yaw).toArray().map((x) => Math.round(x * 1e5) / 1e5), r: 0, g: 1 };
+}
+let snapInfo = null;
+function snapGround(kind, P, keep) {
+  const inBoard = (c) => Math.abs(c.x) < BOARD / 2 - 0.4 && Math.abs(c.z) < BOARD / 2 - 0.4;
+  if (kind === 'fence') {
+    const fences = fenceList(), occupied = (c) => fences.some((f) => f.c.distanceTo(c) < 0.15);
+    const allEnds = fences.flatMap((f) => f.ends);
+    let best = null;
+    for (const f of fences) for (const [i, E] of f.ends.entries()) {
+      if (allEnds.filter((x) => x.distanceTo(E) < 0.05).length > 1) continue; // already joined
+      const out = f.ax.clone().multiplyScalar(i ? 1 : -1);
+      for (const th of [0, Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2]) {
+        const dir = out.clone().applyAxisAngle(UP, th), C = E.clone().addScaledVector(dir, 0.5), dd = C.distanceTo(P);
+        if (dd < 0.55 && !occupied(C) && inBoard(C) && (!best || dd < best.dd)) best = { dd, C, yaw: Math.atan2(-dir.z, dir.x), pt: E, type: 'end' };
+      }
+    }
+    if (!best) for (const sl of ringSlots()) {
+      const dd = sl.c.distanceTo(P);
+      if (dd < 0.75 && !occupied(sl.c) && (!best || dd < best.dd)) best = { dd, C: sl.c, yaw: sl.yaw, pt: sl.c, type: 'ring' };
+    }
+    if (best) { snapInfo = best; return fenceData(best.C, best.yaw, keep); }
+  }
+  const C = new V3(Math.round(P.x * 2) / 2, 0, Math.round(P.z * 2) / 2);
+  if (!inBoard(C)) return null;
+  snapInfo = { pt: C, type: 'grid' };
+  const d = fenceData(C, snap45(camYaw()), keep, kind);
+  d.v = keep ? keep.v : nextVariant[kind]; d.r = keep && keep.g ? keep.r || 0 : 0;
+  return d;
+}
+const snapMarker = new THREE.Mesh(new THREE.TorusGeometry(0.13, 0.025, 8, 28).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffd34d, transparent: true, opacity: 0.9, depthTest: false }));
+snapMarker.renderOrder = 10; snapMarker.visible = false; scene.add(snapMarker);
+const ringGuide = (() => {
+  const pts = [[-RING_X, -RING_Z], [RING_X, -RING_Z], [RING_X, RING_Z], [-RING_X, RING_Z]].map(([x, z]) => new V3(x, 0.09, z));
+  const l = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineDashedMaterial({ color: 0xffd34d, dashSize: 0.25, gapSize: 0.15, transparent: true, opacity: 0.85 }));
+  l.computeLineDistances(); l.visible = false; scene.add(l); return l;
+})();
+function hideSnapUI() { snapMarker.visible = false; ringGuide.visible = false; }
 function candyDataAt(kind, hit, keep) {
   const K = KINDS[kind], n = hit.normal;
   let mode = K.mode; if (mode === 'auto') mode = n.y > 0.85 ? 'stand' : 'flat';
   if (K.ground && n.y < 0.7) return null;
+  hideSnapUI();
+  if (mode === 'stand' && isGroundHit(hit) && !isFreePlace()) {
+    snapInfo = null; const d = snapGround(kind, hit.point, keep);
+    if (d) {
+      if (snapInfo) { snapMarker.position.set(snapInfo.pt.x, snowHeight(snapInfo.pt.x, snapInfo.pt.z) + 0.05, snapInfo.pt.z); snapMarker.scale.setScalar(snapInfo.type === 'grid' ? 0.6 : 1.2); snapMarker.visible = true; }
+      ringGuide.visible = kind === 'fence';
+      return d;
+    }
+  }
   const q = candyQuat(n, mode), p = hit.point.clone().addScaledVector(n, mode === 'stand' ? 0 : -0.006);
   return { t: 'candy', k: kind, v: keep ? keep.v : nextVariant[kind], m: mode, p: p.toArray().map(r3), q: q.toArray().map((x) => Math.round(x * 1e5) / 1e5), r: keep ? keep.r : 0 };
 }
@@ -1014,11 +1101,13 @@ function startSelect(e) {
     if (id != null) { select(o, { id, mesh: h.object, inst: h.instanceId }); active = { type: 'move', obj: o, before: o.userData.data, moved: false }; return true; }
   }
   select(o);
+  snapExclude = o;
   active = { type: 'move', obj: o, before: o.userData.data, moved: false };
   return true;
 }
 
 function onMove(e) {
+  shiftHeld = e.shiftKey;
   if (!active || e.pointerId !== active.pointerId) {
     if (!active && phase === 'decorate' && KINDS[tool] && !KINDS[tool].scatter && e.pointerType === 'mouse' && e.target === renderer.domElement) {
       const h = hitSurface(e); const d = h && candyDataAt(tool, h); d ? showGhost(d) : hideGhost();
@@ -1075,15 +1164,15 @@ function onUp(e) {
       commit(addAction(createDecoration(d))); if (d.t === 'dot') sfx.pop();
       break;
     }
-    case 'stamp': if (a.last) placeCandy(a.last); else if (KINDS[a.kind].ground) toast('Trees and fences stand in the snowy yard 🌲'); break;
+    case 'stamp': hideSnapUI(); if (a.last) placeCandy(a.last); else if (KINDS[a.kind].ground) toast('Trees and fences stand in the snowy yard 🌲'); break;
     case 'scatter': {
       tempGroup.remove(a.im);
       if (a.data.pts.length) { const g = new THREE.Group(); g.add(a.im); g.userData.data = a.data; commit(addAction(g)); }
       break;
     }
-    case 'move': if (a.moved && a.obj.userData.data !== a.before) commit(changeAction(a.obj, a.before, a.obj.userData.data)); break;
+    case 'move': snapExclude = null; hideSnapUI(); if (a.moved && a.obj.userData.data !== a.before) commit(changeAction(a.obj, a.before, a.obj.userData.data)); break;
     case 'tray': {
-      if (!a.moved) { tool = a.kind; renderPanelState(); toast(`${KINDS[a.kind].label.replace(/\u00ad/g, '')}: click or tap on the house to stick one on`); }
+      if (!a.moved) { tool = a.kind; renderPanelState(); toast(`${KINDS[a.kind].label.replace(/\u00ad/g, '')}: click or tap ${KINDS[a.kind].ground ? 'in the yard to place one — it snaps into line (hold Shift for free placing)' : 'on the house to stick one on'}`); }
       else if (a.last && overCanvas(e)) placeCandy(a.last);
       else { hideGhost(); if (overCanvas(e) && KINDS[a.kind].ground) toast('Trees and fences stand in the snowy yard 🌲'); }
       break;
@@ -1105,7 +1194,7 @@ function showGhost(d) {
   if (!ghost || ghost.key !== key) { hideGhost(); const obj = KINDS[d.k].build(d.m, d.v); obj.traverse((o) => { if (o.isMesh) { o.material = ghostify(o.material); o.castShadow = false; } }); scene.add(obj); ghost = { key, obj }; }
   applyCandy(ghost.obj, d);
 }
-function hideGhost() { if (ghost) { scene.remove(ghost.obj); ghost = null; } }
+function hideGhost() { hideSnapUI(); if (ghost) { scene.remove(ghost.obj); ghost = null; } }
 
 // selection
 function select(o, elem = null) {
@@ -1119,7 +1208,7 @@ function select(o, elem = null) {
   updateActionButtons();
 }
 function refreshSel() { if (selBox && selected && selBox.isBoxHelper !== false && selBox.update && selElem == null) selBox.update(); }
-function rotateSel(dir) { if (!selected || selected.userData.data.t !== 'candy') return; const b = selected.userData.data; commit(changeAction(selected, b, { ...b, r: (b.r || 0) + dir * Math.PI / 12 })); sfx.tick(); }
+function rotateSel(dir) { if (!selected || selected.userData.data.t !== 'candy') return; const b = selected.userData.data; commit(changeAction(selected, b, { ...b, r: r3((b.r || 0) + dir * (b.g ? Math.PI / 4 : Math.PI / 12)) })); sfx.tick(); }
 function deleteSel() {
   if (!selected) return;
   const o = selected, id = selElem; select(null);
@@ -1130,6 +1219,7 @@ function deleteSel() {
   sfx.tick();
 }
 
+window.addEventListener('keyup', (e) => { if (e.key === 'Shift') shiftHeld = false; });
 window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT') { if (e.key === 'Enter') e.target.blur(); return; }
   const k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
@@ -1139,6 +1229,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'q') rotateSel(-1);
   else if (k === 'e' || k === 'r') rotateSel(1);
   else if (k === 'escape') { cancelActive(); select(null); hideGhost(); }
+  else if (k === 'shift') shiftHeld = true;
 });
 
 // ---------------- photo / reset ----------------
@@ -1410,9 +1501,12 @@ window.GB = {
   get lastPhoto() { return window.__lastPhoto; },
   busy() { return tweens.length > 0; },
   selElem: () => selElem,
+  fences: () => fenceList().map((f) => ({ c: f.c.toArray().map(r3), ends: f.ends.map((e) => e.toArray().map(r3)) })),
+  select(i) { const o = decorGroup.children[i]; select(o); },
   findElem(type, inst) {
     const r = renderer.domElement.getBoundingClientRect();
-    for (let y = r.top + 120; y < r.bottom - 120; y += 9) for (let x = r.left + 330; x < r.right - 330; x += 9) {
+    for (let y = r.top + 90; y < r.bottom - 90; y += 9) for (let x = r.left + 10; x < r.right - 10; x += 9) {
+      if (document.elementFromPoint(x, y) !== renderer.domElement) continue;
       setRay({ clientX: x, clientY: y }); const h = raycaster.intersectObjects(decorGroup.children, true)[0]; if (!h) continue;
       let o = h.object; while (o.parent && o.parent !== decorGroup) o = o.parent;
       if (o.userData.data.t === type && (inst ? h.object.isInstancedMesh && h.object.userData.elemIds : (h.object.userData.elemIds || h.object.userData.elemId))) return { x, y };
