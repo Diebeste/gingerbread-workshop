@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Gingerbread House Workshop</title>
+<meta name="description" content="Build and decorate your own 3D gingerbread house, just like a real kit.">
+<style>/*__CSS__*/</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage"></div>
+  <header id="topbar">
+    <div class="brand"><span class="logo">🏠</span><span class="brand-text">Gingerbread Workshop</span></div>
+    <ol id="steps">
+      <li data-step="build"><b>1</b><span>Build</span></li>
+      <li data-step="ice"><b>2</b><span>Ice</span></li>
+      <li data-step="decorate"><b>3</b><span>Decorate</span></li>
+      <li data-step="finish"><b>4</b><span>Finish</span></li>
+    </ol>
+    <div class="top-right">
+      <input id="name" maxlength="28" placeholder="Your name" autocomplete="off" aria-label="Your name">
+      <button id="mute" class="icon-btn" title="Sound on/off">🔊</button>
+    </div>
+  </header>
+
+  <section id="guide">
+    <div class="guide-head"><span id="guide-title"></span><button id="guide-toggle" class="mini" title="Hide/show tips">–</button></div>
+    <p id="guide-text"></p>
+    <div id="guide-progress"></div>
+    <button id="autobuild" class="secondary">✨ Build it for me</button>
+    <button id="next" class="primary"></button>
+  </section>
+
+  <section id="panel"></section>
+
+  <div id="actions">
+    <button id="undo" class="act" title="Undo (Ctrl+Z)">↶<span>Undo</span></button>
+    <button id="redo" class="act" title="Redo (Ctrl+Y)">↷<span>Redo</span></button>
+    <button id="rotl" class="act" title="Rotate left (Q)">⟲<span>Turn</span></button>
+    <button id="rotr" class="act" title="Rotate right (E)">⟳<span>Turn</span></button>
+    <button id="del" class="act" title="Delete (Del)">🗑<span>Delete</span></button>
+    <button id="photo" class="act photo" title="Take a photo">📷<span>Photo</span></button>
+    <button id="reset" class="act" title="Start over">↺<span>Reset</span></button>
+  </div>
+
+  <div id="hint">Drag empty space to look around · scroll or pinch to zoom · right‑drag also rotates</div>
+  <div id="toast"><span id="toast-text"></span><i id="toast-bar"></i></div>
+  <div id="namecard"><div class="nc-title"></div><div class="nc-sub">Gingerbread Workshop · <span class="nc-date"></span></div></div>
+  <div id="modal" hidden><div class="modal-card"><div id="modal-body"></div><div id="modal-buttons"></div></div></div>
+  <div id="loading"><div class="spinner"></div><div>Warming up the oven…</div></div>
+</div>
+<script>/*__JS__*/</script>
+</body>
+</html>
