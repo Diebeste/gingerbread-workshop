@@ -1,1 +1,18 @@
 node_modules/
+
+# Android / Capacitor
+android-app/node_modules/
+android-app/www/index.html
+android-app/www/native.js
+android-app/android/local.properties
+android-app/android/.gradle/
+android-app/android/build/
+android-app/android/app/build/
+android-app/android/app/src/main/assets/public/
+android-app/android/keystore.properties
+android-app/release/*.apk
+android-app/release/*.aab
+android-app/release/*.apks
+*.jks
+*.keystore
+keystore.properties

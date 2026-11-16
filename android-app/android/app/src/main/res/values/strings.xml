@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Gingerbread House Workshop</string>
+    <string name="title_activity_main">Gingerbread House Workshop</string>
+    <string name="package_name">com.diebeste.gingerbreadworkshop</string>
+    <string name="custom_url_scheme">com.diebeste.gingerbreadworkshop</string>
+</resources>

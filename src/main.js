@@ -1232,9 +1232,23 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'shift') shiftHeld = true;
 });
 
+function isNativeApp() {
+  try { return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()); }
+  catch { return false; }
+}
+async function exportFile(blobOrUrl, fname, mime) {
+  if (isNativeApp() && window.GingerbreadNative && window.GingerbreadNative.exportFile) {
+    await window.GingerbreadNative.exportFile(blobOrUrl, fname, mime);
+    return 'native';
+  }
+  const url = typeof blobOrUrl === 'string' ? blobOrUrl : URL.createObjectURL(blobOrUrl);
+  const a = document.createElement('a'); a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove();
+  if (typeof blobOrUrl !== 'string') setTimeout(() => URL.revokeObjectURL(url), 10000);
+  return 'web';
+}
 // ---------------- photo / reset ----------------
 function flash() { const f = document.createElement('div'); f.style.cssText = 'position:fixed;inset:0;background:#fff;opacity:.9;z-index:50;pointer-events:none;transition:opacity .5s'; document.body.appendChild(f); requestAnimationFrame(() => requestAnimationFrame(() => (f.style.opacity = '0'))); setTimeout(() => f.remove(), 600); }
-function takePhoto() {
+async function takePhoto() {
   if (selBox) selBox.visible = false; hideGhost(); targetGhost.visible = false;
   renderer.render(scene, camera);
   const src = renderer.domElement, w = src.width, h = src.height, band = Math.round(Math.max(96, h * 0.13));
@@ -1253,10 +1267,18 @@ function takePhoto() {
   sfx.shutter(); flash();
   const url = c.toDataURL('image/png');
   const fname = `gingerbread-house-${(name || 'mine').replace(/[^\w-]+/g, '-').toLowerCase()}.png`;
-  const a = document.createElement('a'); a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove();
-  window.__lastPhoto = { fname, bytes: Math.round(url.length * 0.75), w, h: h + band };
-  modal(`<h3>📸 Photo saved!</h3><img src="${url}" alt="Gingerbread house photo"><div class="note">It's in your downloads as <b>${fname}</b>. Share it with everyone!</div>`, [{ label: 'Download again', href: url, download: fname, cls: 'go', keep: true }, { label: 'Close' }]);
+  let how = 'web';
+  try { how = await exportFile(url, fname, 'image/png'); } catch (e) { console.warn('photo export failed', e); }
+  window.__lastPhoto = { fname, bytes: Math.round(url.length * 0.75), w, h: h + band, how };
+  const note = how === 'native'
+    ? `Use the share sheet to save <b>${fname}</b> to Photos or Files, or send it to a friend.`
+    : `It's in your downloads as <b>${fname}</b>. Share it with everyone!`;
+  const again = how === 'native'
+    ? { label: 'Share again', cls: 'go', keep: true, onClick: () => { exportFile(url, fname, 'image/png'); } }
+    : { label: 'Download again', href: url, download: fname, cls: 'go', keep: true };
+  modal(`<h3>📸 Photo saved!</h3><img src="${url}" alt="Gingerbread house photo"><div class="note">${note}</div>`, [again, { label: 'Close' }]);
 }
+
 function doReset() {
   tweens.length = 0; cancelActive(); select(null); hideGhost();
   decorGroup.clear(); tempGroup.clear(); undoStack.length = 0; redoStack.length = 0;
@@ -1316,13 +1338,14 @@ function loadState(s) {
   flyTo(...(phase === 'build' ? buildView() : houseView()));
   updateNameCard(); renderGuide(); renderPanel(); applyViewOffset(); afterChange();
 }
-function saveToFile() {
+async function saveToFile() {
   const st = { ...getState(), savedAt: new Date().toISOString() };
   const fname = `${slug(st.name)}-gingerbread.gingerbread`;
-  const url = URL.createObjectURL(new Blob([JSON.stringify(st)], { type: 'application/json' }));
-  const a = document.createElement('a'); a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
-  sfx.chime(); toast(`💾 Saved to your downloads as ${fname}`, 3200);
+  const blob = new Blob([JSON.stringify(st)], { type: 'application/json' });
+  let how = 'web';
+  try { how = await exportFile(blob, fname, 'application/json'); } catch (e) { console.warn('save export failed', e); }
+  sfx.chime();
+  toast(how === 'native' ? `💾 ${fname} — pick a place to save or share it` : `💾 Saved to your downloads as ${fname}`, 3200);
 }
 function loadError(fileName, why) {
   window.__lastLoadError = why;
@@ -1459,7 +1482,7 @@ $('#name').addEventListener('input', () => { updateNameCard(); afterChange(); })
 $('#undo').onclick = undo; $('#redo').onclick = redo;
 $('#rotl').onclick = () => rotateSel(-1); $('#rotr').onclick = () => rotateSel(1);
 $('#del').onclick = deleteSel; $('#photo').onclick = takePhoto;
-$('#save').onclick = saveToFile; $('#load').onclick = () => fileInput.click(); $('#saves').onclick = openSaves;
+$('#save').onclick = saveToFile; $('#load').onclick = () => { if (isNativeApp()) fileInput.accept = '*/*'; fileInput.click(); }; $('#saves').onclick = openSaves;
 $('#reset').onclick = () => modal('<h3>Start over?</h3>This unwraps a fresh kit and clears your house and decorations.', [{ label: 'Keep my house' }, { label: 'Start over', cls: 'go', onClick: doReset }]);
 $('#next').onclick = () => { const i = ORDER.indexOf(phase); if (phase === 'finish') takePhoto(); else setPhase(ORDER[i + 1]); };
 $('#autobuild').onclick = autoBuild;

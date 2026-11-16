@@ -1,0 +1,23 @@
+{
+  "name": "gingerbread-house-workshop",
+  "version": "1.0.0",
+  "description": "Build and decorate a 3D gingerbread house — Android app for Google Play.",
+  "private": true,
+  "scripts": {
+    "build:web": "node scripts/build-www.mjs",
+    "assets": "node scripts/make-assets.mjs",
+    "sync": "npm run build:web && npx cap sync android",
+    "open": "npx cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.6.10",
+    "@capacitor/app": "^7.1.2",
+    "@capacitor/cli": "^7.6.10",
+    "@capacitor/core": "^7.6.10",
+    "@capacitor/filesystem": "^7.1.9",
+    "@capacitor/share": "^7.0.4",
+    "@capacitor/splash-screen": "^7.0.5",
+    "@capacitor/status-bar": "^7.0.6",
+    "esbuild": "^0.28.2"
+  }
+}
